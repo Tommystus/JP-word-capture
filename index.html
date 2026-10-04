@@ -109,6 +109,8 @@
   td.jp   { font-size: 19px; color: var(--jp); line-height: 1.4; min-width: 150px; }
   td.hira { font-size: 16px; color: #b9c6ff; line-height: 1.4; min-width: 130px; }
   td.roma { font-size: 14px; color: var(--muted); font-style: italic; min-width: 120px; word-break: break-word; }
+  td.hira.loading, td.roma.loading { color: var(--muted); }
+  td.acts button.need { border-color: var(--accent); color: var(--accent); }
   td.en   { font-size: 15px; min-width: 200px; }
   td.en.pending { color: var(--muted); font-style: italic; }
   td.en.error   { color: #f87171; font-style: normal; font-size: 13px; }
@@ -183,7 +185,7 @@
       </table>
     </div>
     <div id="empty" class="empty">Nothing captured yet. Press “Start listening” and say something in Japanese.</div>
-    <div class="hint">Kana and romaji are generated locally from a bundled dictionary — no network call, no API key. Kanji outside that dictionary are left as-is in the hiragana column. You can also select the table cells and copy them directly (Ctrl/⌘+C) — the columns stay intact when pasted into Excel or Google Sheets.</div>
+    <div class="hint">Kana and romaji come from a bundled dictionary — instant, offline, no API key. Rows the dictionary could not fully read are marked <span style="color:var(--accent)">✦</span>; click it to get better readings from Puter AI (asks you to sign in the first time). You can also select the table cells and copy them directly (Ctrl/⌘+C) — the columns stay intact when pasted into Excel or Google Sheets.</div>
   </div>
 </div>
 
@@ -255,13 +257,14 @@
       tr.appendChild(kanji);
 
       var hira = document.createElement('td');
-      hira.className = 'hira';
-      hira.textContent = it.hiragana;
+      hira.className = 'hira' + (it.kanaSource === 'loading' ? ' loading' : '');
+      hira.textContent = it.kanaSource === 'loading' ? '…' : it.hiragana;
+      if (it.kanaSource === 'ai') hira.title = 'reading supplied by Puter AI';
       tr.appendChild(hira);
 
       var roma = document.createElement('td');
-      roma.className = 'roma';
-      roma.textContent = it.romanji;
+      roma.className = 'roma' + (it.kanaSource === 'loading' ? ' loading' : '');
+      roma.textContent = it.kanaSource === 'loading' ? '…' : it.romanji;
       tr.appendChild(roma);
 
       var def = document.createElement('td');
@@ -286,6 +289,19 @@
       var gap = document.createElement('span');
       gap.className = 'gap';
       acts.appendChild(gap);
+
+      var ai = document.createElement('button');
+      ai.textContent = '✦';
+      ai.title = 'Improve readings with Puter AI';
+      ai.disabled = it.kanaSource === 'loading';
+      // flag rows the bundled dictionary could not fully read
+      if (needsRefinement(it) && it.kanaSource !== 'ai') ai.className = 'need';
+      ai.onclick = function () { refine(it, true); };
+      acts.appendChild(ai);
+
+      var gap2 = document.createElement('span');
+      gap2.className = 'gap';
+      acts.appendChild(gap2);
 
       var del = document.createElement('button');
       del.textContent = '✕';
@@ -383,14 +399,22 @@
     var item = {
       kanji: text,
       hiragana: hira,
-      romanji: Kana ? Kana.toRomaji(hira) : '',
+      romaji: Kana ? Kana.toRomaji(hira) : '',
       definition: '',
+      kanaSource: 'local',
       status: 'pending',
       ts: Date.now()
     };
     items.push(item);
     render();
     translate(item);
+
+    // silently upgrade only if the local dictionary came up short and the
+    // user has already signed in to Puter
+    if (needsRefinement(item)) {
+      if (window.puter) refine(item, false);
+      else loadPuter().then(function () { if (window.puter) refine(item, false); }, function () {});
+    }
   }
 
   function translate(item) {
@@ -475,6 +499,90 @@
       lines.push('You can still type Japanese in the box below — kana, romaji and translation all work.');
       return lines.join('\n');
     });
+  }
+
+  /* ---------- optional AI kana refinement ---------- */
+
+  // kana.js handles most vocabulary instantly. It deliberately leaves unknown
+  // kanji as-is rather than guessing, which is also our signal that it needs
+  // help: if kanji survive in the output, the conversion was incomplete.
+  function needsRefinement(item) {
+    return !Kana || /[一-鿿]/.test(item.hiragana);
+  }
+
+  var puterLoader = null;
+  function loadPuter() {
+    if (window.puter) return Promise.resolve(window.puter);
+    if (puterLoader) return puterLoader;
+    puterLoader = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://js.puter.com/v2/';
+      s.async = true;
+      s.onload = function () {
+        if (window.puter) resolve(window.puter);
+        else reject(new Error('the Puter SDK loaded but did not initialise'));
+      };
+      s.onerror = function () { reject(new Error('could not load the Puter SDK (network?)')); };
+      document.head.appendChild(s);
+    });
+    return puterLoader;
+  }
+
+  function extractJSON(text) {
+    var t = String(text).replace(/```json/gi, '').replace(/```/g, '').trim();
+    try { return JSON.parse(t); }
+    catch (e) {
+      var m = t.match(/\{[\s\S]*\}/);
+      if (!m) throw new Error('no JSON in the reply');
+      return JSON.parse(m[0]);
+    }
+  }
+
+  // allowSignIn=false keeps this silent: we only reach the AI when the user has
+  // already signed in, so capturing a phrase never pops a sign-in window.
+  function askPuter(kanji, allowSignIn) {
+    return loadPuter()
+      .then(function (puter) {
+        // isSignedIn() returns a plain boolean in the current SDK (it is not a
+        // Promise), while signIn() returns one — Promise.resolve accepts both,
+        // which also survives a future SDK that makes the former async.
+        return Promise.resolve(puter.auth.isSignedIn()).then(function (in_) {
+          if (in_) return puter;
+          if (!allowSignIn) return null;
+          return Promise.resolve(puter.auth.signIn()).then(function () { return puter; });
+        });
+      })
+      .then(function (puter) {
+        if (!puter) return null;
+        var prompt = 'Read this Japanese text: "' + kanji + '".\n\n' +
+          'Respond with ONLY raw JSON, no markdown fences, no commentary:\n' +
+          '{ "hiragana": "the full text written in hiragana", "romaji": "lowercase romanized reading" }';
+        return puter.ai.chat(prompt, { normalize: true }).then(function (res) {
+          var raw = (res && res.message && res.message.content) || res;
+          if (!raw) throw new Error('empty reply');
+          return extractJSON(raw);
+        });
+      });
+  }
+
+  function refine(item, allowSignIn) {
+    if (item.kanaSource === 'loading') return Promise.resolve();
+    item.kanaSource = 'loading';
+    render();
+
+    return askPuter(item.kanji, allowSignIn)
+      .then(function (data) {
+        if (!data) { item.kanaSource = 'local'; return; }   // declined to sign in
+        if (data.hiragana) item.hiragana = String(data.hiragana).trim();
+        if (data.romaji) item.romanji = String(data.romaji).trim();
+        item.kanaSource = 'ai';
+      })
+      .catch(function (e) {
+        item.kanaSource = 'local';
+        showBanner('AI kana unavailable: ' + e.message +
+          '\nThe bundled dictionary readings are still shown.');
+      })
+      .then(render);
   }
 
   /* ---------- speech recognition ---------- */
