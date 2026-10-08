@@ -185,7 +185,7 @@
       </table>
     </div>
     <div id="empty" class="empty">Nothing captured yet. Press “Start listening” and say something in Japanese.</div>
-    <div class="hint">Kana and romaji come from a bundled dictionary — instant, offline, no API key. Rows the dictionary could not fully read are marked <span style="color:var(--accent)">✦</span>; click it to get better readings from Puter AI (asks you to sign in the first time). You can also select the table cells and copy them directly (Ctrl/⌘+C) — the columns stay intact when pasted into Excel or Google Sheets.</div>
+    <div class="hint">Kana and romaji come from a bundled dictionary — instant, offline, no API key. Definitions come from the MyMemory translation API. Rows the dictionary could not fully read are marked <span style="color:var(--accent)">✦</span>; click it to get better readings <em>and</em> a higher-quality translation from Puter AI (asks you to sign in the first time). You can also select the table cells and copy them directly (Ctrl/⌘+C) — the columns stay intact when pasted into Excel or Google Sheets.</div>
   </div>
 </div>
 
@@ -292,7 +292,7 @@
 
       var ai = document.createElement('button');
       ai.textContent = '✦';
-      ai.title = 'Improve readings with Puter AI';
+      ai.title = 'Improve readings and translation with Puter AI';
       ai.disabled = it.kanaSource === 'loading';
       // flag rows the bundled dictionary could not fully read
       if (needsRefinement(it) && it.kanaSource !== 'ai') ai.className = 'need';
@@ -556,7 +556,7 @@
         if (!puter) return null;
         var prompt = 'Read this Japanese text: "' + kanji + '".\n\n' +
           'Respond with ONLY raw JSON, no markdown fences, no commentary:\n' +
-          '{ "hiragana": "the full text written in hiragana", "romaji": "lowercase romanized reading" }';
+          '{ "hiragana": "the full text written in hiragana", "romaji": "lowercase romanized reading", "definition": "concise English translation" }';
         return puter.ai.chat(prompt, { normalize: true }).then(function (res) {
           var raw = (res && res.message && res.message.content) || res;
           if (!raw) throw new Error('empty reply');
@@ -575,12 +575,16 @@
         if (!data) { item.kanaSource = 'local'; return; }   // declined to sign in
         if (data.hiragana) item.hiragana = String(data.hiragana).trim();
         if (data.romaji) item.romaji = String(data.romaji).trim();
+        if (data.definition) {
+          item.definition = String(data.definition).trim();
+          item.status = 'ok';
+        }
         item.kanaSource = 'ai';
       })
       .catch(function (e) {
         item.kanaSource = 'local';
-        showBanner('AI kana unavailable: ' + e.message +
-          '\nThe bundled dictionary readings are still shown.');
+        showBanner('AI refinement unavailable: ' + e.message +
+          '\nThe bundled dictionary readings and existing translation are still shown.');
       })
       .then(render);
   }
