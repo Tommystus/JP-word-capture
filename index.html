@@ -264,7 +264,7 @@
 
       var roma = document.createElement('td');
       roma.className = 'roma' + (it.kanaSource === 'loading' ? ' loading' : '');
-      roma.textContent = it.kanaSource === 'loading' ? '…' : it.romanji;
+      roma.textContent = it.kanaSource === 'loading' ? '…' : it.romaji;
       tr.appendChild(roma);
 
       var def = document.createElement('td');
@@ -324,7 +324,7 @@
         return {
           kanji: it.kanji,
           hiragana: it.hiragana,
-          romanji: it.romanji,
+          romaji: it.romaji,
           definition: it.status === 'error' ? '' : it.definition
         };
       })
@@ -574,7 +574,7 @@
       .then(function (data) {
         if (!data) { item.kanaSource = 'local'; return; }   // declined to sign in
         if (data.hiragana) item.hiragana = String(data.hiragana).trim();
-        if (data.romaji) item.romanji = String(data.romaji).trim();
+        if (data.romaji) item.romaji = String(data.romaji).trim();
         item.kanaSource = 'ai';
       })
       .catch(function (e) {
@@ -687,7 +687,7 @@
     recognition = build();
     listening = true;
     try { recognition.start(); }
-    catch (e) { showBanner('Could not start the microphone: ' + e.message); }
+    catch (e) { listening = false; showBanner('Could not start the microphone: ' + e.message); }
   });
 
   /* ---------- manual input ---------- */
